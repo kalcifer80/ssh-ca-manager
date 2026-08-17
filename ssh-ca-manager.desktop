@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=SSH-CA Manager
+Comment=SSH Certificate Authority verwalten
+Exec=ssh-ca-manager
+Icon=application-certificate
+Terminal=false
+Categories=System;Security;
