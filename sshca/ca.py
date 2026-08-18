@@ -256,6 +256,117 @@ class CertificateAuthority:
         cert_path.chmod(0o644)
         return self.load_certificate(cert_path)
 
+    #: Zuordnung des ersten Tokens eines Public Keys zum Kurznamen im Dateinamen.
+    _KEYTYPE_NAMES = {
+        "ssh-ed25519": "ed25519",
+        "ssh-rsa": "rsa",
+        "ecdsa-sha2-nistp256": "ecdsa",
+        "ecdsa-sha2-nistp384": "ecdsa",
+        "ecdsa-sha2-nistp521": "ecdsa",
+        "sk-ssh-ed25519@openssh.com": "ed25519_sk",
+        "sk-ecdsa-sha2-nistp256@openssh.com": "ecdsa_sk",
+    }
+
+    def import_and_sign_pubkey(
+        self, pubkey: str | Path, request: CertRequest
+    ) -> CertInfo:
+        """Signiert einen EXTERN erzeugten Public Key.
+
+        Der Benutzer reicht nur den oeffentlichen Teil ein; einen privaten
+        Schluessel gibt es hier nie. Der Key wird unter <user>/<host>/
+        abgelegt (Dateiname nach tatsaechlichem Schluesseltyp) und signiert.
+        Reicht derselbe user/host erneut ein, wandert der bisherige Stand
+        nach archive/ — das ist die Re-Zertifizierung. Existiert dort ein
+        LOKAL verwalteter Schluessel (privater Teil vorhanden), wird
+        abgebrochen, damit kein Paar auseinandergerissen wird.
+        """
+        self.require()
+        request.validate()
+
+        if isinstance(pubkey, Path) or (
+            isinstance(pubkey, str) and "\n" not in pubkey.strip()
+            and Path(pubkey).expanduser().is_file()
+        ):
+            text = Path(pubkey).expanduser().read_text(encoding="utf-8")
+        else:
+            text = str(pubkey)
+        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        if "PRIVATE KEY" in text:
+            raise CaError(
+                "Das ist ein PRIVATER Schlüssel — bitte nur den "
+                "öffentlichen Teil (.pub) einreichen."
+            )
+        if len(lines) != 1:
+            raise CaError("Bitte genau einen öffentlichen Schlüssel einreichen "
+                          "(eine Zeile).")
+        line = lines[0]
+        keytype = line.split(None, 1)[0]
+        if keytype not in self._KEYTYPE_NAMES:
+            raise CaError(f"Unbekannter Schlüsseltyp: {keytype}")
+
+        host_dir = self.host_dir_prepared(request.user, request.host)
+        key_base = host_dir / (
+            f"{request.host}_{request.user}_{self._KEYTYPE_NAMES[keytype]}"
+        )
+        pub_path = Path(str(key_base) + ".pub")
+
+        # Der Key muss fuer ssh-keygen lesbar sein, bevor irgendetwas
+        # rotiert wird.
+        probe = host_dir / f".probe-{os.getpid()}.pub"
+        probe.write_text(line + "\n", encoding="utf-8")
+        try:
+            result = self.ssh.run(["-l", "-f", str(probe)], check=False)
+            if result.returncode != 0:
+                raise CaError(
+                    "ssh-keygen kann den eingereichten Schlüssel nicht lesen: "
+                    + (result.stderr.strip() or "unbekannter Fehler")
+                )
+        finally:
+            probe.unlink(missing_ok=True)
+
+        for candidate in host_dir.glob(f"{request.host}_{request.user}_*"):
+            if candidate.is_file() and not candidate.name.endswith(
+                (".pub", "-cert.pub")
+            ):
+                raise CaError(
+                    f"Für {request.user}@{request.host} existiert ein lokal "
+                    "verwalteter Schlüssel — bitte dort „Erneuern“ verwenden "
+                    "oder das Material zuerst widerrufen/löschen."
+                )
+
+        # Bisherigen (extern signierten) Stand rotieren — wie beim Erneuern
+        # bleibt genau die letzte Version im Archiv.
+        existing = [
+            item for item in host_dir.iterdir()
+            if item.is_file() and item.suffix == ".pub"
+        ]
+        if existing:
+            archive = host_dir / "archive"
+            archive.mkdir(parents=True, exist_ok=True)
+            archive.chmod(0o700)
+            for old in archive.iterdir():
+                if old.is_file():
+                    old.unlink()
+            for item in existing:
+                shutil.move(str(item), archive / item.name)
+
+        pub_path.write_text(line + "\n", encoding="utf-8")
+        pub_path.chmod(0o644)
+        info = self.sign(key_base, request)
+        self.log(
+            "OK",
+            f"Externer Schlüssel signiert: {request.user}@{request.host} "
+            f"({keytype}) serial={info.serial} "
+            f"principals={info.principals_csv}",
+        )
+        return info
+
+    def host_dir_prepared(self, user: str, host: str) -> Path:
+        host_dir = self.paths.host_dir(user, host)
+        host_dir.mkdir(parents=True, exist_ok=True)
+        host_dir.chmod(0o700)
+        return host_dir
+
     def renew_certificate(self, cert: CertInfo, request: CertRequest) -> CertInfo:
         """Archiviert das alte Material und erstellt Schluessel und Zertifikat neu."""
         self.require()

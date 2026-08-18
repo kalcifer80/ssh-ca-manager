@@ -192,6 +192,59 @@ def main() -> int:
         check("Benutzer-Ordner mit Inhalt bleibt",
               (paths.base / "dennis").is_dir())
 
+        # --- Externen Public Key signieren ------------------------------------
+        import subprocess as _sp
+        foreign = Path(tmp) / "foreign_ed25519"
+        _sp.run(["ssh-keygen", "-t", "ed25519", "-f", str(foreign),
+                 "-N", "", "-C", "max@laptop"], check=True, capture_output=True)
+        req_ext = CertRequest(
+            user="max", host="jump", principals=["max", "max@jump"],
+            validity="+1h", extensions=["permit-pty"], ca_passphrase=CA_PASS,
+        )
+        ext = ca.import_and_sign_pubkey(Path(str(foreign) + ".pub"), req_ext)
+        check("externer Key signiert", ext.cert_path.is_file(),
+              ext.cert_path.name)
+        check("kein privater Schlüssel im Bestand", not ext.has_private_key)
+        check("externer Key: Status gültig", ext.status() is Status.VALID)
+
+        ext2 = ca.import_and_sign_pubkey(
+            Path(str(foreign) + ".pub").read_text(), req_ext)
+        check("Wiedereinreichung rotiert", ext2.serial != ext.serial
+              and any((ext2.cert_path.parent / "archive").glob("*-cert.pub")))
+
+        foreign_rsa = Path(tmp) / "foreign_rsa"
+        _sp.run(["ssh-keygen", "-t", "rsa", "-b", "3072", "-f",
+                 str(foreign_rsa), "-N", "", "-C", "max@pc"],
+                check=True, capture_output=True)
+        ext_rsa = ca.import_and_sign_pubkey(
+            Path(str(foreign_rsa) + ".pub"),
+            CertRequest(user="max", host="web", principals=["max"],
+                        validity="+1h", ca_passphrase=CA_PASS),
+        )
+        check("RSA-Key: Typ im Dateinamen", "_rsa-cert.pub" in ext_rsa.cert_path.name,
+              ext_rsa.cert_path.name)
+
+        try:
+            ca.import_and_sign_pubkey("kein schlüssel", req_ext)
+            check("Müll abgelehnt", False)
+        except CaError:
+            check("Müll abgelehnt", True)
+        try:
+            ca.import_and_sign_pubkey(foreign.read_text(), req_ext)
+            check("privater Schlüssel abgelehnt", False)
+        except CaError as exc:
+            check("privater Schlüssel abgelehnt", "PRIVATER" in str(exc))
+        try:
+            ca.import_and_sign_pubkey(
+                Path(str(foreign) + ".pub"),
+                CertRequest(user="dennis", host="web01", principals=["dennis"],
+                            validity="+1h", ca_passphrase=CA_PASS),
+            )
+            check("Konflikt mit lokalem Schlüssel erkannt", False)
+        except CaError as exc:
+            check("Konflikt mit lokalem Schlüssel erkannt",
+                  "lokal verwaltet" in str(exc))
+
         # --- Widerrufsablage löschen ------------------------------------------
         entry = list(ca.iter_revoked_entries())[0]
         ca.delete_revoked_entry(entry)

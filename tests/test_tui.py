@@ -191,6 +191,31 @@ def main() -> int:
               "old01" in out and "gültig (" not in out.split("Ungültiges löschen")[1].split("Schlüssel,")[0])
         check("abgelaufenes gelöscht", "Gelöscht: dennis@old01" in out)
 
+        # --- Externen Schlüssel signieren (geführt) --------------------------
+        import subprocess as _sp
+        foreign = Path(tmp) / "extern_rsa"
+        _sp.run(["ssh-keygen", "-t", "rsa", "-b", "3072", "-f", str(foreign),
+                 "-N", "", "-C", "extern@pc"], check=True, capture_output=True)
+        out = session(
+            base,
+            inputs=[
+                "s",
+                str(foreign) + ".pub",   # eingereichte Datei
+                "extern", "web01",       # Benutzer, Zielhost
+                "",                      # Vorlage: Standard
+                "",                      # Gültigkeit aus Vorlage
+                "",                      # Prinzipale weiter
+                "",                      # Extensions anpassen? Nein
+                "",                      # Critical? Nein
+                "",                      # signieren (Vorgabe Ja)
+                "q",
+            ],
+            passwords=[CA_PASS],
+        )
+        check("TUI: externer Key signiert",
+              "Externer Schlüssel signiert: extern@web01" in out)
+        check("TUI: Hinweis auf Rückgabe", "Zertifikatsdatei" in out)
+
         # --- CA-Status, Vorlagen, Log ---------------------------------------
         out = session(base, inputs=["c", "t", "l", "q"])
         check("CA-Statuspanel", "Certificate Authority" in out

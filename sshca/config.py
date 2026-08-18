@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "SSH-CA Manager"
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.3.2"
 
 #: Dateiformat der erzeugten Schluessel. ed25519 mit 100 KDF-Runden.
 KEY_TYPE = "ed25519"

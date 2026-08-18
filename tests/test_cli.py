@@ -184,6 +184,28 @@ def main() -> int:
         code, out = run(b + ["purge", "ansible", "web01", "--yes"])
         check("purge ohne Treffer scheitert", code == 1)
 
+        # Externen Key signieren + auf ihm arbeiten (Lookup-Fallback)
+        import subprocess as _sp
+        foreign = Path(tmp) / "kollege_rsa"
+        _sp.run(["ssh-keygen", "-t", "rsa", "-b", "3072", "-f", str(foreign),
+                 "-N", "", "-C", "kollege@laptop"],
+                check=True, capture_output=True)
+        code, out = run(
+            b + ["sign-key", str(foreign) + ".pub", "kollege", "jump",
+                 "--no-agent", "-p", "kollege", "-V", "+1h"],
+            passwords=[CA_PASS],
+        )
+        check("sign-key signiert externen Key", code == 0
+              and "Externer Schlüssel signiert" in out)
+        check("sign-key nennt Rückgabedatei", "jump_kollege_rsa-cert.pub" in out)
+        code, out = run(b + ["show", "kollege", "jump"])
+        check("show findet Nicht-ed25519-Datei", code == 0
+              and "kollege" in out)
+        code, out = run(b + ["revoke", "kollege", "jump", "--no-agent",
+                             "--yes", "--reason", "extern-test"],
+                        passwords=[CA_PASS])
+        check("revoke auf externem Key", code == 0)
+
         # Sicherung, Anleitung, Log
         backup_file = str(Path(tmp) / "sicherung.tar.gz")
         code, out = run(b + ["backup", "-o", backup_file])

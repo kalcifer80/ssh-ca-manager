@@ -411,6 +411,61 @@ def _flow_create(ca: CertificateAuthority,
     print(f"    ssh -i {cert.key_path} {principal}@{cert.host}")
 
 
+def _flow_sign_external(ca: CertificateAuthority) -> None:
+    _rule("Externen Schlüssel signieren")
+    print(_c(MUTED, "  Der Benutzer reicht nur den öffentlichen Teil (.pub) "
+                    "ein — ein privater Schlüssel entsteht hier nicht."))
+    pubfile = _ask("Pfad zur eingereichten .pub-Datei")
+    if not pubfile:
+        return
+    path = Path(pubfile).expanduser()
+    if not path.is_file():
+        _bad(f"Datei nicht gefunden: {path}")
+        return
+    user = _ask("Benutzer", validate=_validate_name)
+    host = _ask("Zielhost", validate=_validate_name)
+
+    templates = TemplateStore(ca.paths.templates_file).load()
+    entries = [
+        f"{_pad(t.name, 26)} {_pad(t.validity, 6)} "
+        + _c(MUTED, ", ".join(t.extensions) or "(keine Extensions)")
+        for t in templates
+    ]
+    index = _pick("Vorlage wählen:", entries)
+    if index is None:
+        print("  Abgebrochen.")
+        return
+    template = templates[index]
+    validity = _ask("Gültigkeit", default=template.validity,
+                    validate=lambda v: None if v else "Gültigkeit wird benötigt.")
+    principals = _collect_principals(
+        template, user, host, ca.paths.read_principals_conf()
+    )
+    extensions, critical = _collect_extensions(template)
+    use_agent, ca_pass = _collect_signing(ca)
+
+    _panel("Zusammenfassung", [
+        f"Eingereicht:    {path}",
+        f"Benutzer/Host:  {user}@{host}",
+        f"Gültigkeit:     {validity}",
+        f"Prinzipale:     {', '.join(principals)}",
+        f"Extensions:     {', '.join(extensions) or '(keine)'}",
+    ])
+    if not _ask_yesno("Schlüssel jetzt signieren?", default=True):
+        print("  Abgebrochen.")
+        return
+    request = CertRequest(
+        user=user, host=host, principals=principals, validity=validity,
+        extensions=extensions, critical_options=critical,
+        ca_passphrase=ca_pass, use_agent=use_agent,
+    )
+    cert = ca.import_and_sign_pubkey(path, request)
+    _ok(f"Externer Schlüssel signiert: {cert.user}@{cert.host}")
+    _cert_details(cert)
+    print(_c(MUTED, "  Zurück an den Benutzer geht nur die Zertifikatsdatei; "
+                    "er legt sie neben seinen privaten Schlüssel."))
+
+
 def _flow_show(ca: CertificateAuthority) -> None:
     _rule("Details")
     cert = _pick_cert(ca)
@@ -666,6 +721,7 @@ _MENU_CERT = [
     ("5", "Widerrufen / Sperren", _flow_revoke),
     ("6", "Ungültiges löschen", _flow_delete),
     ("7", "Gültige exportieren (tar.gz)", _flow_export),
+    ("s", "Externen Schlüssel signieren", _flow_sign_external),
 ]
 _MENU_REVOKED = [
     ("8", "Vorgänge auflisten", _flow_revoked),

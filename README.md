@@ -99,6 +99,26 @@ sshca/
         workers.py       Hintergrundausführung
 ```
 
+## Externe Schlüssel signieren
+
+Ein Benutzer, der sein Schlüsselpaar selbst erzeugt hat, reicht nur den
+öffentlichen Teil ein und bekommt das passende Zertifikat zurück — sein
+privater Schlüssel existiert auf der CA zu keinem Zeitpunkt:
+
+* **GUI:** Zertifikate → „Externen Schlüssel signieren …" — Public Key
+  einfügen oder als Datei laden, Vorlage/Prinzipale/Extensions wie gewohnt.
+* **CLI:** `ssh-ca-manager sign-key eingereicht.pub max jump -p max -V +1h`
+* **Menü:** Taste `s` unter „Zertifikate".
+
+Der Key landet unter `<user>/<host>/` (Dateiname nach Schlüsseltyp, z. B.
+`jump_max_rsa.pub`), unterstützt werden ed25519, RSA, ECDSA und
+FIDO-Schlüssel (sk-*). Zurück an den Benutzer geht nur die Datei
+`…-cert.pub`; er legt sie neben seinen privaten Schlüssel. Reicht derselbe
+user/host erneut ein, wandert der bisherige Stand nach `archive/`
+(Re-Zertifizierung). Kollidiert die Einreichung mit einem lokal verwalteten
+Schlüssel, wird abgebrochen. Widerruf, Export und Anzeige behandeln extern
+signierte Einträge wie alle anderen.
+
 ## Erscheinungsbild
 
 Dunkles Graphit mit Bernstein-Akzent, als Basis der Qt-Stil „Fusion" — der

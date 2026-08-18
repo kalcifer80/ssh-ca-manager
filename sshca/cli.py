@@ -91,7 +91,16 @@ def _resolve_signing(ca: CertificateAuthority, args) -> tuple[bool, str]:
 def _find_cert(ca: CertificateAuthority, user: str, host: str) -> CertInfo:
     cert_path = Path(str(ca.paths.key_path(user, host)) + "-cert.pub")
     if not cert_path.is_file():
-        raise CaError(f"Kein Zertifikat für {user}@{host} unter {cert_path.parent}")
+        # Extern signierte Schlüssel tragen ihren Typ im Namen (rsa, ecdsa …).
+        candidates = sorted(
+            ca.paths.host_dir(user, host).glob(f"{host}_{user}_*-cert.pub")
+        )
+        if candidates:
+            cert_path = candidates[0]
+        else:
+            raise CaError(
+                f"Kein Zertifikat für {user}@{host} unter {cert_path.parent}"
+            )
     return ca.load_certificate(cert_path)
 
 
@@ -280,6 +289,23 @@ def cmd_create(ca: CertificateAuthority, args) -> int:
     principal = cert.principals[0] if cert.principals else cert.user
     print("\nAnmeldung:")
     print(f"  ssh -i {cert.key_path} {principal}@{cert.host}")
+    return 0
+
+
+def cmd_sign_key(ca: CertificateAuthority, args) -> int:
+    """Signiert einen extern erzeugten Public Key."""
+    ca.require()
+    pubfile = Path(args.pubfile).expanduser()
+    if not pubfile.is_file():
+        return _err(f"Datei nicht gefunden: {pubfile}")
+    request = _build_request(ca, args, ask_key_pass=False)
+    cert = ca.import_and_sign_pubkey(pubfile, request)
+    print(f"Externer Schlüssel signiert: {cert.user}@{cert.host}")
+    _print_cert_summary(cert)
+    print("\nZurück an den Benutzer geht nur die Zertifikatsdatei:")
+    print(f"  {cert.cert_path.name}")
+    print("Er legt sie neben seinen privaten Schlüssel "
+          "(<key> und <key>-cert.pub).")
     return 0
 
 
@@ -518,6 +544,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("host")
     _add_cert_options(p)
 
+    p = sub.add_parser("sign-key",
+                       help="extern erzeugten Public Key signieren")
+    p.add_argument("pubfile", help="eingereichte .pub-Datei des Benutzers")
+    p.add_argument("user")
+    p.add_argument("host")
+    _add_cert_options(p)
+
     p = sub.add_parser("show", help="Details eines Zertifikats")
     p.add_argument("user")
     p.add_argument("host")
@@ -583,6 +616,7 @@ _HANDLERS = {
     "pubkey": cmd_pubkey,
     "list": cmd_list,
     "create": cmd_create,
+    "sign-key": cmd_sign_key,
     "show": cmd_show,
     "renew": cmd_renew,
     "revoke": cmd_revoke,

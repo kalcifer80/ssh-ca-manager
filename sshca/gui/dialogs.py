@@ -184,18 +184,23 @@ class CertDialog(QDialog):
         agent_available: bool = False,
         fixed: tuple[str, str] | None = None,
         title: str = "Neues Zertifikat",
+        external: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumWidth(620)
         self.templates = templates or []
         self.conf_principals = conf_principals or []
+        self.external = external
 
         layout = QVBoxLayout(self)
         tabs = QTabWidget()
         tabs.addTab(self._build_general_tab(fixed), "Allgemein")
         tabs.addTab(self._build_extensions_tab(), "Extensions")
-        tabs.addTab(self._build_security_tab(agent_available), "Schlüssel && Signatur")
+        tabs.addTab(
+            self._build_security_tab(agent_available),
+            "Schlüssel && Signatur" if not external else "Signatur",
+        )
         layout.addWidget(tabs)
 
         self.hint = QLabel("")
@@ -343,6 +348,33 @@ class CertDialog(QDialog):
         page = QWidget()
         outer = QVBoxLayout(page)
 
+        if self.external:
+            group0 = QGroupBox("Eingereichter öffentlicher Schlüssel")
+            box0 = QVBoxLayout(group0)
+            note0 = QLabel(
+                "Der Benutzer reicht nur den öffentlichen Teil (.pub) ein — "
+                "ein privater Schlüssel wird hier weder erzeugt noch "
+                "gespeichert. Der Dateiname im Bestand richtet sich nach dem "
+                "Schlüsseltyp."
+            )
+            note0.setWordWrap(True)
+            note0.setObjectName("noteMuted")
+            box0.addWidget(note0)
+            self.pubkey_edit = QPlainTextEdit()
+            self.pubkey_edit.setPlaceholderText(
+                "ssh-ed25519 AAAA… benutzer@rechner  (oder Datei laden)"
+            )
+            self.pubkey_edit.setFont(monospace())
+            self.pubkey_edit.setMaximumHeight(96)
+            box0.addWidget(self.pubkey_edit)
+            load_button = QPushButton("Aus Datei laden …")
+            load_button.clicked.connect(self._load_pubkey_file)
+            row0 = QHBoxLayout()
+            row0.addWidget(load_button)
+            row0.addStretch(1)
+            box0.addLayout(row0)
+            outer.addWidget(group0)
+
         group = QGroupBox("Passphrase des neuen Schlüssels")
         form = QFormLayout(group)
         self.key_pass1 = QLineEdit()
@@ -356,6 +388,10 @@ class CertDialog(QDialog):
         )
         form.addRow("", self.empty_key_pass)
         outer.addWidget(group)
+        if self.external:
+            # Eingehängt (damit Qt die Widgets nicht wegräumt), aber
+            # unsichtbar: bei externen Schlüsseln gibt es keine Passphrase.
+            group.setVisible(False)
 
         group2 = QGroupBox("Signatur durch die CA")
         form2 = QFormLayout(group2)
@@ -485,6 +521,22 @@ class CertDialog(QDialog):
                 "Angabe wird unverändert an ssh-keygen übergeben"
             )
 
+    def _load_pubkey_file(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        from pathlib import Path as _Path
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Öffentlichen Schlüssel wählen", str(_Path.home()),
+            "Public Key (*.pub);;Alle Dateien (*)",
+        )
+        if path:
+            self.pubkey_edit.setPlainText(
+                _Path(path).read_text(encoding="utf-8").strip()
+            )
+
+    def external_pubkey(self) -> str:
+        return self.pubkey_edit.toPlainText().strip() if self.external else ""
+
     def _check(self) -> None:
         if not self.user_field.text().strip() or not self.host_field.text().strip():
             self.hint.setText("Benutzer und Zielhost werden benötigt.")
@@ -492,7 +544,22 @@ class CertDialog(QDialog):
         if self.principal_list.count() == 0:
             self.hint.setText("Mindestens ein Prinzipal wird benötigt.")
             return
-        if not self.empty_key_pass.isChecked():
+        if self.external:
+            text = self.external_pubkey()
+            if "PRIVATE KEY" in text:
+                self.hint.setText(
+                    "Das ist ein privater Schlüssel — bitte den öffentlichen "
+                    "Teil (.pub) einreichen."
+                )
+                return
+            if not text or not text.split(None, 1)[0].startswith(
+                ("ssh-", "ecdsa-", "sk-")
+            ):
+                self.hint.setText(
+                    "Bitte einen öffentlichen Schlüssel einfügen oder laden."
+                )
+                return
+        if not self.external and not self.empty_key_pass.isChecked():
             if len(self.key_pass1.text()) < 8:
                 self.hint.setText(
                     "Die Passphrase des Schlüssels sollte mindestens 8 Zeichen haben."

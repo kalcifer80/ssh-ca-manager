@@ -222,6 +222,39 @@ def main() -> int:
         check("Widerrufsliste nach Löschen leer",
               window.revoked_model.rowCount() == 0)
 
+        # --- Externen Schlüssel über den Dialog signieren -------------------
+        import subprocess as _sp
+        foreign = Path(tmp) / "extern_ed25519"
+        _sp.run(["ssh-keygen", "-t", "ed25519", "-f", str(foreign),
+                 "-N", "", "-C", "extern@laptop"],
+                check=True, capture_output=True)
+        ext_dialog = CertDialog(
+            window, templates=window.template_store.load(), external=True,
+            title="Externen Schlüssel signieren",
+        )
+        check("Extern-Dialog ohne Passphrasen-Gruppe",
+              not ext_dialog.key_pass1.isVisible())
+        ext_dialog.user_field.setText("extern")
+        ext_dialog.host_field.setText("jump")
+        ext_dialog.ca_pass.setText(CA_PASS)
+        ext_dialog.pubkey_edit.setPlainText(foreign.read_text())
+        ext_dialog._check()
+        check("Extern-Dialog weist privaten Schlüssel ab",
+              "privater Schlüssel" in ext_dialog.hint.text())
+        ext_dialog.pubkey_edit.setPlainText(
+            Path(str(foreign) + ".pub").read_text().strip())
+        ext_cert = window.ca.import_and_sign_pubkey(
+            ext_dialog.external_pubkey(), ext_dialog.request())
+        check("Extern-Dialogdaten signieren", ext_cert.cert_path.is_file()
+              and not ext_cert.has_private_key)
+        window.refresh(force=True)
+        check("extern signierter Key in der Liste",
+              any(window.cert_model.cert_at(i).user == "extern"
+                  for i in range(window.cert_model.rowCount())))
+        check("Menüaktion vorhanden",
+              window.act_sign_external.text().startswith("Externen"))
+        ext_dialog.deleteLater()
+
         init_dialog = CaInitDialog(window, base / "ca" / "ca_key")
         init_dialog.pass1.setText("kurz")
         init_dialog._check()

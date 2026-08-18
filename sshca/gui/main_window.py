@@ -121,6 +121,9 @@ class MainWindow(QMainWindow):
         self.act_revoke = QAction("Widerrufen", self)
         self.act_revoke.triggered.connect(self.revoke_certificate)
 
+        self.act_sign_external = QAction("Externen Schlüssel signieren …", self)
+        self.act_sign_external.triggered.connect(self.sign_external_key)
+
         self.act_export = QAction("Gültige exportieren …", self)
         self.act_export.triggered.connect(self.export_certificates)
 
@@ -184,6 +187,7 @@ class MainWindow(QMainWindow):
         for action in (self.act_new, self.act_details, self.act_renew, self.act_revoke):
             cert_menu.addAction(action)
         cert_menu.addSeparator()
+        cert_menu.addAction(self.act_sign_external)
         cert_menu.addAction(self.act_export)
         cert_menu.addAction(self.act_delete)
         cert_menu.addSeparator()
@@ -501,7 +505,7 @@ class MainWindow(QMainWindow):
         has_ca = self.ca.exists()
         for action in (
             self.act_new, self.act_renew, self.act_revoke,
-            self.act_export, self.act_delete,
+            self.act_export, self.act_delete, self.act_sign_external,
         ):
             action.setEnabled(has_ca)
         for button in (
@@ -622,6 +626,35 @@ class MainWindow(QMainWindow):
                 on_error=self._fail,
             on_done=lambda: self.setEnabled(True),
             )
+
+    def sign_external_key(self) -> None:
+        """Signiert einen vom Benutzer eingereichten Public Key."""
+        try:
+            self.ca.require()
+        except CaError as exc:
+            info_box(self, "Keine CA", str(exc))
+            return
+        dialog = CertDialog(
+            self,
+            templates=self.template_store.load(),
+            conf_principals=self.paths.read_principals_conf(),
+            agent_available=self.ca.ca_in_agent(),
+            title="Externen Schlüssel signieren",
+            external=True,
+        )
+        if dialog.exec() != CertDialog.Accepted:
+            return
+        request = dialog.request()
+        pubkey = dialog.external_pubkey()
+        self._busy("Eingereichter Schlüssel wird signiert …")
+        run_task(
+            self.ca.import_and_sign_pubkey,
+            pubkey,
+            request,
+            on_success=self._after_create,
+            on_error=self._fail,
+            on_done=lambda: self.setEnabled(True),
+        )
 
     def _after_create(self, cert: CertInfo) -> None:
         self.refresh(force=True)
