@@ -1,0 +1,13 @@
+# Projektmetadaten. Es gibt bewusst keinen Build-/Installationsschritt —
+# die Anwendung wird aus dem Projektverzeichnis gestartet (siehe README).
+[project]
+name = "ssh-ca-manager"
+version = "0.3.2"
+description = "SSH Certificate Authority verwalten — GUI, CLI und interaktives Menü"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = []            # Kern/CLI/TUI: nur Standardbibliothek + OpenSSH
+
+[project.optional-dependencies]
+gui = ["PySide6>=6.5"]

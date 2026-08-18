@@ -1,8 +1,21 @@
 # SSH-CA Manager
 
-Grafische Verwaltung einer SSH Certificate Authority — das, was XCA für X.509
-ist, für OpenSSH-Zertifikate. Eigenständige Desktop-Anwendung, alles lokal, kein
-Dienst und keine Datenbank im Hintergrund.
+Verwaltung einer SSH Certificate Authority — das, was XCA für X.509 ist, für
+OpenSSH-Zertifikate. Eigenständige Anwendung mit drei gleichwertigen
+Oberflächen (GUI, interaktives Terminal-Menü, Subcommand-CLI) über einer
+gemeinsamen Kernschicht; alles lokal, kein Dienst und keine Datenbank im
+Hintergrund.
+
+**Dokumentation:**
+
+| Dokument | Für wen |
+|---|---|
+| [docs/BENUTZERHANDBUCH.md](docs/BENUTZERHANDBUCH.md) | Bedienung: GUI, Menü, CLI, typische Abläufe |
+| [docs/ADMINISTRATION.md](docs/ADMINISTRATION.md) | Installation, Datenlayout, Sicherheitsmodell, Zielsysteme, Sicherung, Fehlerbehebung |
+| [docs/ENTWICKLUNG.md](docs/ENTWICKLUNG.md) | Architektur, Modulverantwortungen, unantastbare Invarianten, Tests, Release-Prozess |
+| [CHANGELOG.md](CHANGELOG.md) | Versionshistorie |
+
+Dieses README ist der Schnelleinstieg; die Handbücher sind maßgeblich.
 
 Der Datenbestand ist derselbe wie beim Bash-Skript `ssh-ca-tool.sh`: gleiche
 Verzeichnisse, gleiches Namensschema, gleiches Logformat. Skript und GUI lassen
