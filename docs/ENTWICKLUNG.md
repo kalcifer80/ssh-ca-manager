@@ -1,6 +1,6 @@
 # SSH-CA Manager — Entwicklungsdokumentation
 
-Stand: Version 0.3.3
+Stand: Version 0.3.4
 
 Dieses Dokument enthält alles, was für die Weiterführung des Projekts ohne
 weiteres Vorwissen nötig ist: Architektur, Modulverantwortungen, die
@@ -253,6 +253,8 @@ Screenshots zur Sichtprüfung entstehen headless (`widget.grab().save(…)`)
 * **0.3.3** Eingabeprüfung für Namen und Prinzipale (Pfadausbruch und
   stille Prinzipalerweiterung); `restore` gegen Traversal und Symlinks
   abgedichtet; KRL-Prüfung als Sammelaufruf.
+* **0.3.4** Widerruf sperrt Zertifikat und Public Key statt nur der
+  Seriennummer.
 * **Verworfen: Client-Server** (0.4.0-dev, nicht in der Historie von
   `main`). HTTPS-Signierdienst mit Token-Enrollment, `ssh-keygen -Y`-
   signierten Requests, Policies, systemd-Härtung — funktionsfähig

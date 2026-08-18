@@ -3,6 +3,21 @@
 Alle nennenswerten Änderungen; Versionierung nach SemVer, Version steht in
 `sshca/config.py` (`APP_VERSION`).
 
+## 0.3.4 — 2026-08-19
+
+* **Fix: Widerruf sperrte nur die Seriennummer, nicht den Schlüssel.** In die
+  KRL ging bisher ausschließlich die `…-cert.pub`, woraus `ssh-keygen` einen
+  Eintrag über die Seriennummer macht — gültig für genau dieses eine
+  Zertifikat. Der zugehörige Public Key blieb aus Sicht der Zielsysteme
+  unbelastet und hätte jederzeit ein neues, gültiges Zertifikat bekommen
+  können. Widerruf und Sperrung nehmen jetzt Zertifikat **und** Public Key
+  auf; beide Einträge gehen in einem Aufruf an die bestehende KRL (`-u`).
+* `revoke()`/`krl_add()` kennen dafür `revoke_key` (Vorgabe: `True`).
+  `revoke_key=False` beschränkt den Eintrag auf die Seriennummer — nur
+  sinnvoll, wenn derselbe Public Key später erneut zertifiziert werden soll,
+  etwa bei einem FIDO-Token.
+* `revoked.info` hält im neuen Feld `krl=` fest, was eingetragen wurde.
+
 ## 0.3.3 — 2026-08-19
 
 * Prinzipale werden geprüft: Komma, Leer- und Steuerzeichen sind nicht mehr

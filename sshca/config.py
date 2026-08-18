@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "SSH-CA Manager"
-APP_VERSION = "0.3.3"
+APP_VERSION = "0.3.4"
 
 
 class CaError(RuntimeError):

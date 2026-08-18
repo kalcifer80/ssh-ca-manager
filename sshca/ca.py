@@ -459,7 +459,41 @@ class CertificateAuthority:
                 revoked.add(match)
         return answered, revoked
 
-    def krl_add(self, cert_path: Path, ca_passphrase: str, use_agent: bool = False) -> None:
+    def krl_add(
+        self,
+        cert_path: Path,
+        ca_passphrase: str,
+        use_agent: bool = False,
+        revoke_key: bool = True,
+    ) -> None:
+        """Nimmt Zertifikat und zugehoerigen Schluessel in die KRL auf.
+
+        Eine KRL kennt zwei Arten von Eintraegen, und der Unterschied ist
+        wesentlich:
+
+        * Aus einem **Zertifikat** entsteht ein Eintrag ueber die
+          Seriennummer. Er gilt nur fuer genau dieses eine Zertifikat —
+          derselbe Public Key bekaeme jederzeit wieder ein gueltiges.
+        * Aus einem **Public Key** entsteht ein Eintrag ueber den Schluessel
+          selbst. Er sperrt den Schluessel und damit jedes Zertifikat, das je
+          fuer ihn ausgestellt wurde oder noch ausgestellt wird.
+
+        Bis 0.3.3 wanderte nur die Seriennummer in die Liste; der Schluessel
+        blieb aus Sicht der Zielsysteme gueltig. Da widerrufenes Material hier
+        ohnehin nach ``revoked/`` ausgelagert und nicht wieder in Betrieb
+        genommen wird, kommen jetzt beide Eintraege hinein.
+
+        ``-u`` haengt an die bestehende KRL an; existiert noch keine, wird sie
+        angelegt. Beide Eintraege gehen in einem einzigen Aufruf raus, damit
+        die Liste nie halb aktualisiert zurueckbleibt.
+        """
+        cert_path = Path(cert_path)
+        targets = [cert_path]
+        if revoke_key:
+            pub_path = Path(str(cert_path).removesuffix("-cert.pub") + ".pub")
+            if pub_path.is_file():
+                targets.append(pub_path)
+
         args = ["-k"]
         if self.paths.krl.is_file():
             args.append("-u")
@@ -469,7 +503,8 @@ class CertificateAuthority:
         else:
             args += ["-s", str(self.paths.ca_key)]
             passphrases = [ca_passphrase]
-        args += ["-f", str(self.paths.krl), str(cert_path)]
+        args += ["-f", str(self.paths.krl)]
+        args += [str(path) for path in targets]
         self.ssh.run(args, passphrases=passphrases)
         self.paths.krl.chmod(0o600)
 
@@ -480,17 +515,23 @@ class CertificateAuthority:
         action: str = "widerrufen",
         ca_passphrase: str = "",
         use_agent: bool = False,
+        revoke_key: bool = True,
     ) -> Path:
-        """Nimmt das Zertifikat in die KRL auf und lagert das Material aus.
+        """Nimmt Zertifikat und Schluessel in die KRL auf und lagert aus.
 
         Reihenfolge wie im Skript: erst die KRL, dann verschieben. Schlaegt die
         KRL fehl, bleibt auf der Platte alles unveraendert.
+
+        ``revoke_key=False`` beschraenkt den Eintrag auf die Seriennummer des
+        Zertifikats. Das ist nur sinnvoll, wenn derselbe Public Key spaeter
+        erneut zertifiziert werden soll — etwa bei einem FIDO-Token, dessen
+        Schluessel sich nicht austauschen laesst.
         """
         self.require()
         user = cert.user or cert.cert_path.parent.parent.name
         host = cert.host or cert.cert_path.parent.name
 
-        self.krl_add(cert.cert_path, ca_passphrase, use_agent)
+        self.krl_add(cert.cert_path, ca_passphrase, use_agent, revoke_key)
 
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         store = self.paths.revoked_dir / user / host / stamp
@@ -515,6 +556,7 @@ class CertificateAuthority:
             f"host={host}\n"
             f"user={user}\n"
             f"key={cert.key_path.name}\n"
+            f"krl={'Seriennummer und Schlüssel' if revoke_key else 'nur Seriennummer'}\n"
             f"reason={reason or '(kein Grund angegeben)'}\n",
             encoding="utf-8",
         )

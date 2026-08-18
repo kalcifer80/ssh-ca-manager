@@ -128,6 +128,11 @@ def main() -> int:
         check("revoked.info geschrieben", (store_dir / "revoked.info").is_file())
         moved_cert = next(store_dir.glob("*-cert.pub"))
         check("KRL erkennt Widerruf", ca.is_revoked(moved_cert))
+        moved_pub = next(
+            p for p in store_dir.glob("*.pub") if not p.name.endswith("-cert.pub")
+        )
+        check("Public Key ebenfalls gesperrt", ca.is_revoked(moved_pub),
+              moved_pub.name)
         reloaded = ca.load_certificate(moved_cert)
         check("Status ausgelagert", reloaded.status() is Status.STORED, reloaded.status_text())
         entries = list(ca.iter_revoked_entries())
@@ -350,6 +355,35 @@ def main() -> int:
         hits = ca.revoked_paths([widerrufen_cert, gueltig.cert_path])
         check("Sammelprüfung erkennt Widerruf",
               widerrufen_cert in hits and gueltig.cert_path not in hits)
+
+        # Ein zweiter Widerruf darf den ersten nicht aus der KRL werfen.
+        krl_vorher = paths.krl.stat().st_size
+        zweiter = ca.create_certificate(CertRequest(
+            user="sammel", host="db", principals=["sammel"],
+            key_passphrase=KEY_PASS, ca_passphrase=CA_PASS,
+        ))
+        zweiter_dir = ca.revoke(zweiter, reason="Sammeltest 2",
+                                ca_passphrase=CA_PASS)
+        zweiter_cert = next(zweiter_dir.glob("*-cert.pub"))
+        check("KRL ist gewachsen", paths.krl.stat().st_size > krl_vorher,
+              f"{krl_vorher} → {paths.krl.stat().st_size} Bytes")
+        check("erster Widerruf bleibt bestehen", ca.is_revoked(widerrufen_cert))
+        check("zweiter Widerruf eingetragen", ca.is_revoked(zweiter_cert))
+
+        # Nur-Seriennummer-Variante für Sonderfälle (FIDO-Token o. Ä.).
+        nur_serial = ca.create_certificate(CertRequest(
+            user="sammel", host="token", principals=["sammel"],
+            key_passphrase=KEY_PASS, ca_passphrase=CA_PASS,
+        ))
+        nur_serial_dir = ca.revoke(nur_serial, reason="nur Serial",
+                                   ca_passphrase=CA_PASS, revoke_key=False)
+        ns_cert = next(nur_serial_dir.glob("*-cert.pub"))
+        ns_pub = next(
+            p for p in nur_serial_dir.glob("*.pub")
+            if not p.name.endswith("-cert.pub")
+        )
+        check("revoke_key=False: Zertifikat gesperrt", ca.is_revoked(ns_cert))
+        check("revoke_key=False: Schlüssel bleibt frei", not ca.is_revoked(ns_pub))
 
         broken = paths.base / "sammel" / "jump" / "kaputt.pub"
         broken.write_text("kein Zertifikat\n", encoding="utf-8")

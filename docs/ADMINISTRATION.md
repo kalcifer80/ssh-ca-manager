@@ -200,6 +200,18 @@ ist.
 
 ## KRL-Verteilung nach Widerruf
 
+In die KRL gehen zwei Einträge je Vorgang: die **Seriennummer** des
+Zertifikats und der **Public Key** selbst. Der zweite ist der wichtigere —
+ein Eintrag über die Seriennummer gilt nur für genau dieses Zertifikat,
+während der Schlüsseleintrag jedes Zertifikat sperrt, das je für diesen
+Schlüssel ausgestellt wurde oder noch würde. Was eingetragen wurde, steht in
+`revoked.info` unter `krl=`.
+
+Folge davon: ein einmal widerrufener Public Key ist endgültig verbrannt. Bei
+einem eingereichten FIDO-Token-Schlüssel, der sich nicht austauschen lässt,
+ist das unerwünscht — dafür gibt es `revoke(..., revoke_key=False)` in der
+Kernschicht, das nur die Seriennummer sperrt.
+
 Nach **jedem** Widerruf muss `ca/revoked_keys.krl` neu auf alle
 Zielsysteme:
 
