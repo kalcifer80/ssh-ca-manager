@@ -3,6 +3,25 @@
 Alle nennenswerten Änderungen; Versionierung nach SemVer, Version steht in
 `sshca/config.py` (`APP_VERSION`).
 
+## 0.3.3 — 2026-08-19
+
+* Prinzipale werden geprüft: Komma, Leer- und Steuerzeichen sind nicht mehr
+  zulässig. `ssh-keygen` trennt die Liste am Komma — ein Prinzipal
+  `dennis,root` wurde vorher stillschweigend zu zweien.
+* Benutzer- und Hostnamen werden zentral in `Paths` geprüft (`..`, `.`,
+  leer, `/`, `\`, Leer- und Steuerzeichen). Vorher konnte `user=".."` ein
+  Verzeichnis neben dem Datenverzeichnis anlegen. `CaError` liegt dafür
+  jetzt in `config.py` und wird von `ca.py` weiter exportiert.
+* `restore` weist Ausbrüche zuverlässig ab: der Präfixvergleich enthält den
+  Pfadtrenner (ein Nachbarverzeichnis `…/.ssh-ca-fremd` kam vorher durch),
+  Symlink- und Hardlinkziele werden geprüft, und `extractall` läuft mit
+  `filter="tar"` als zweitem Riegel (`data` scheidet aus: es setzt
+  Verzeichnisse auf 0755).
+* Widerrufsprüfung als Sammelaufruf (`revoked_paths`): der Index prüft alle
+  Zertifikate mit einem `ssh-keygen -Q` statt mit einem je Zertifikat. Bricht
+  der Sammelaufruf an einer unlesbaren Datei ab, werden die unbeantworteten
+  einzeln nachgefragt.
+
 ## 0.3.2 — 2026-08-18
 
 * Neu: extern erzeugte Public Keys signieren — der Benutzer reicht nur die

@@ -21,7 +21,15 @@ import os
 from pathlib import Path
 
 APP_NAME = "SSH-CA Manager"
-APP_VERSION = "0.3.2"
+APP_VERSION = "0.3.3"
+
+
+class CaError(RuntimeError):
+    """Fachlicher Fehler, dessen Text direkt anzeigbar ist.
+
+    Liegt in der untersten Schicht, damit auch die Pfadbildung ihn werfen kann;
+    ``sshca.ca`` exportiert ihn weiter, alle bisherigen Importe bleiben gueltig.
+    """
 
 #: Dateiformat der erzeugten Schluessel. ed25519 mit 100 KDF-Runden.
 KEY_TYPE = "ed25519"
@@ -31,6 +39,31 @@ DEFAULT_VALIDITY = "+1h"
 
 #: Verzeichnisnamen, die direkt unter der Basis liegen und keine Benutzer sind.
 RESERVED_NAMES = {"ca", "backups", "revoked"}
+
+#: Namen, aus denen kein Verzeichnis unterhalb der Basis werden darf.
+_FORBIDDEN_NAMES = {"", ".", ".."}
+_FORBIDDEN_CHARS = {"/", "\\", "\0"}
+
+
+def validate_name(label: str, value: str) -> str:
+    """Prueft einen Benutzer- oder Hostnamen, bevor daraus ein Pfad wird.
+
+    Absichtlich eine Sperrliste und keine Zeichen-Whitelist: was das
+    Bash-Skript angelegt hat, soll lesbar bleiben — auch Namen mit Umlauten.
+    Verboten ist nur, was aus dem Datenverzeichnis herausfuehrt (``..``) oder
+    einen Pfad zerlegt. Die Pruefung sitzt hier und nicht nur in
+    :meth:`CertRequest.validate`, weil auch CLI und TUI Pfade direkt ueber
+    :class:`Paths` bilden.
+    """
+    if value in _FORBIDDEN_NAMES:
+        raise CaError(f"{label} ist ungültig: '{value}'.")
+    for char in value:
+        if char in _FORBIDDEN_CHARS or char.isspace() or ord(char) < 32:
+            raise CaError(
+                f"{label} darf keine Leerzeichen, '/' oder Steuerzeichen "
+                f"enthalten: '{value}'."
+            )
+    return value
 
 
 class Paths:
@@ -89,10 +122,14 @@ class Paths:
 
     # -- Ableitungen ------------------------------------------------------
     def user_dir(self, user: str) -> Path:
-        return self.base / user
+        return self.base / validate_name("Benutzername", user)
 
     def host_dir(self, user: str, host: str) -> Path:
-        return self.base / user / host
+        return (
+            self.base
+            / validate_name("Benutzername", user)
+            / validate_name("Hostname", host)
+        )
 
     def key_path(self, user: str, host: str) -> Path:
         """Namensschema des Skripts: <host>_<user>_ed25519."""

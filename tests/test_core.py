@@ -267,6 +267,111 @@ def main() -> int:
               and (span[1] - span[0]).total_seconds() == 7200)
         check("unbekannte Angabe toleriert", parse_validity_spec("20260101:20270101") is None)
 
+        # --- Eingabeprüfung ---------------------------------------------------
+        for bad_user, label in ((".." , "'..'"), ("a/b", "Schrägstrich"),
+                                ("a b", "Leerzeichen"), ("", "leer")):
+            try:
+                ca.create_certificate(CertRequest(
+                    user=bad_user, host="jump", principals=["x"],
+                    key_passphrase=KEY_PASS, ca_passphrase=CA_PASS,
+                ))
+                check(f"Benutzername {label} abgewiesen", False)
+            except CaError:
+                check(f"Benutzername {label} abgewiesen", True)
+        check("kein Ausbruch aus der Basis",
+              not (paths.base.parent / "jump").exists())
+        try:
+            paths.host_dir("..", "jump")
+            check("Paths weist '..' ab", False)
+        except CaError:
+            check("Paths weist '..' ab", True)
+
+        for bad_principal, label in (("dennis,root", "Komma"),
+                                     ("dennis root", "Leerzeichen"),
+                                     ("  ", "leer")):
+            try:
+                CertRequest(user="dennis", host="jump",
+                            principals=[bad_principal]).validate()
+                check(f"Prinzipal mit {label} abgewiesen", False)
+            except CaError:
+                check(f"Prinzipal mit {label} abgewiesen", True)
+        CertRequest(user="dennis", host="jump",
+                    principals=["dennis", "dennis@jump"]).validate()
+        check("gültige Prinzipale weiterhin erlaubt", True)
+
+        # --- Wiederherstellung weist Ausbrüche ab -----------------------------
+        import io as _io
+
+        evil = Path(tmp) / "boese.tar.gz"
+        with _tarfile.open(evil, "w:gz") as tar:
+            payload = b"pwned\n"
+            member = _tarfile.TarInfo("../ssh-ca-fremd/payload")
+            member.size = len(payload)
+            tar.addfile(member, _io.BytesIO(payload))
+        try:
+            ca.restore(evil)
+            check("Sicherung mit '..' abgewiesen", False)
+        except CaError:
+            check("Sicherung mit '..' abgewiesen", True)
+        check("nichts neben der Basis angelegt",
+              not (Path(tmp) / "ssh-ca-fremd").exists())
+
+        outside = Path(tmp) / "ziel"
+        outside.mkdir()
+        evil_link = Path(tmp) / "boese-link.tar.gz"
+        with _tarfile.open(evil_link, "w:gz") as tar:
+            link = _tarfile.TarInfo("link")
+            link.type = _tarfile.SYMTYPE
+            link.linkname = str(outside)
+            tar.addfile(link)
+            payload = b"x\n"
+            through = _tarfile.TarInfo("link/durch")
+            through.size = len(payload)
+            tar.addfile(through, _io.BytesIO(payload))
+        try:
+            ca.restore(evil_link)
+        except CaError:
+            pass
+        check("nicht durch Symlink geschrieben", not (outside / "durch").exists())
+
+        # --- KRL-Sammelabfrage ------------------------------------------------
+        gueltig = ca.create_certificate(CertRequest(
+            user="sammel", host="jump", principals=["sammel"],
+            key_passphrase=KEY_PASS, ca_passphrase=CA_PASS,
+        ))
+        zu_widerrufen = ca.create_certificate(CertRequest(
+            user="sammel", host="web", principals=["sammel"],
+            key_passphrase=KEY_PASS, ca_passphrase=CA_PASS,
+        ))
+        widerrufen_dir = ca.revoke(zu_widerrufen, reason="Sammeltest",
+                                   ca_passphrase=CA_PASS)
+        widerrufen_cert = next(widerrufen_dir.glob("*-cert.pub"))
+
+        hits = ca.revoked_paths([widerrufen_cert, gueltig.cert_path])
+        check("Sammelprüfung erkennt Widerruf",
+              widerrufen_cert in hits and gueltig.cert_path not in hits)
+
+        broken = paths.base / "sammel" / "jump" / "kaputt.pub"
+        broken.write_text("kein Zertifikat\n", encoding="utf-8")
+        hits = ca.revoked_paths([broken, widerrufen_cert])
+        check("unlesbare Datei verdeckt keinen Widerruf",
+              widerrufen_cert in hits and broken not in hits)
+        broken.unlink()
+
+        refresh_index(ca, index)                      # Cache aufwärmen
+        calls = {"n": 0}
+        original_run = ca.ssh.run
+
+        def counting_run(*args, **kwargs):
+            calls["n"] += 1
+            return original_run(*args, **kwargs)
+
+        ca.ssh.run = counting_run
+        refresh_index(ca, index)
+        ca.ssh.run = original_run
+        check("Refresh aus dem Cache: ein einziger ssh-keygen-Aufruf",
+              calls["n"] == 1, f"{calls['n']} Aufruf(e)")
+
         # --- Log --------------------------------------------------------------
         check("Log geschrieben", "Zertifikat erstellt" in ca.read_log())
 

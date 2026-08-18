@@ -177,18 +177,25 @@ class CertIndex:
 
 def refresh_index(ca, index: CertIndex, force: bool = False) -> list[CertInfo]:
     """Gleicht den Index mit dem Dateibaum ab und liefert die aktiven Zertifikate."""
-    seen: set[str] = set()
+    cert_paths = list(ca.iter_active_certificates())
+    seen = {str(path) for path in cert_paths}
+
+    # Der Widerrufsstatus haengt an der KRL, nicht an der Datei — er muss also
+    # auch fuer Treffer im Cache neu ermittelt werden. Das geschieht fuer alle
+    # Zertifikate in einem einzigen ssh-keygen-Aufruf; sonst haette der Cache
+    # zwar 'ssh-keygen -L' eingespart, dafuer aber je Zertifikat weiterhin ein
+    # 'ssh-keygen -Q' gekostet.
+    revoked = ca.revoked_paths(cert_paths)
+
     result: list[CertInfo] = []
-    for cert_path in ca.iter_active_certificates():
-        seen.add(str(cert_path))
+    for cert_path in cert_paths:
         if not force and index.is_current(cert_path):
             cached = index.get(cert_path)
             if cached is not None:
-                # Der Widerrufsstatus haengt an der KRL, nicht an der Datei.
-                cached.revoked = ca.is_revoked(cert_path)
+                cached.revoked = cert_path in revoked
                 result.append(cached)
                 continue
-        info = ca.load_certificate(cert_path)
+        info = ca.load_certificate(cert_path, revoked=cert_path in revoked)
         index.put(info)
         result.append(info)
 

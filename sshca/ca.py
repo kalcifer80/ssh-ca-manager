@@ -15,13 +15,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .config import KDF_ROUNDS, KEY_TYPE, Paths, RESERVED_NAMES
+from .config import (
+    CaError,
+    KDF_ROUNDS,
+    KEY_TYPE,
+    Paths,
+    RESERVED_NAMES,
+    validate_name,
+)
 from .keygen import Ssh, SshKeygenError
 from .model import CertInfo, RevokedEntry, Status, parse_cert_listing
-
-
-class CaError(RuntimeError):
-    """Fachlicher Fehler, dessen Text direkt anzeigbar ist."""
 
 
 @dataclass
@@ -42,13 +45,28 @@ class CertRequest:
     def validate(self) -> None:
         if not self.user or not self.host:
             raise CaError("Benutzername und Hostname sind erforderlich.")
-        for label, value in (("Benutzername", self.user), ("Hostname", self.host)):
-            if any(ch.isspace() for ch in value) or "/" in value:
-                raise CaError(f"{label} darf keine Leerzeichen und kein '/' enthalten.")
+        validate_name("Benutzername", self.user)
+        validate_name("Hostname", self.host)
         if self.user in RESERVED_NAMES:
             raise CaError(f"Der Benutzername '{self.user}' ist reserviert.")
         if not self.principals:
             raise CaError("Mindestens ein Prinzipal ist erforderlich.")
+        for principal in self.principals:
+            if not principal.strip():
+                raise CaError("Ein Prinzipal darf nicht leer sein.")
+            if "," in principal:
+                # ssh-keygen bekommt die Liste als ein -n-Argument und trennt
+                # sie am Komma. Ein Prinzipal 'dennis,root' waere sonst still
+                # zu zweien geworden — ein Rechtezuwachs, den niemand sieht.
+                raise CaError(
+                    f"Der Prinzipal '{principal}' enthält ein Komma. Bitte "
+                    "einen Eintrag je Prinzipal angeben."
+                )
+            if any(ch.isspace() or ord(ch) < 32 for ch in principal):
+                raise CaError(
+                    f"Der Prinzipal '{principal}' enthält Leer- oder "
+                    "Steuerzeichen."
+                )
 
 
 class CertificateAuthority:
@@ -384,13 +402,62 @@ class CertificateAuthority:
         return self.create_certificate(request)
 
     # ------------------------------------------------------------- Widerruf
+    #: So viele Pfade gehen in einen ssh-keygen-Aufruf.
+    _KRL_CHUNK = 200
+
     def is_revoked(self, cert_path: Path) -> bool:
-        if not self.paths.krl.is_file():
-            return False
+        return Path(cert_path) in self.revoked_paths([Path(cert_path)])
+
+    def revoked_paths(self, cert_paths) -> set[Path]:
+        """Prueft mehrere Zertifikate gegen die KRL — ein Aufruf statt n.
+
+        ``ssh-keygen -Q -f KRL datei …`` nimmt beliebig viele Dateien und
+        schreibt je Datei eine Zeile. Es bricht allerdings komplett ab, sobald
+        eine davon unlesbar ist (Exitcode 255, keine Ausgabe). Dateien, die im
+        Sammelaufruf ohne Antwort bleiben, werden deshalb einzeln nachgefragt:
+        ein kaputter Eintrag darf den Widerruf eines anderen nicht verdecken.
+        """
+        paths = [Path(p) for p in cert_paths]
+        if not paths or not self.paths.krl.is_file():
+            return set()
+
+        revoked: set[Path] = set()
+        for start in range(0, len(paths), self._KRL_CHUNK):
+            chunk = paths[start : start + self._KRL_CHUNK]
+            answered, hits = self._krl_query(chunk)
+            revoked |= hits
+            for path in chunk:
+                if path not in answered:
+                    _, single = self._krl_query([path])
+                    revoked |= single
+        return revoked
+
+    def _krl_query(self, chunk: list[Path]) -> tuple[set[Path], set[Path]]:
+        """Ein einzelner Aufruf. Liefert (beantwortet, widerrufen)."""
         result = self.ssh.run(
-            ["-Q", "-f", str(self.paths.krl), str(cert_path)], check=False
+            ["-Q", "-f", str(self.paths.krl), *(str(p) for p in chunk)],
+            check=False,
         )
-        return "REVOKED" in result.stdout or "REVOKED" in result.stderr
+        answered: set[Path] = set()
+        revoked: set[Path] = set()
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Zeilenformat: "<pfad> (<kommentar>): REVOKED" bzw. "…: ok".
+            # Der laengste passende Pfad gewinnt, falls einer Praefix eines
+            # anderen ist.
+            match = max(
+                (p for p in chunk if line.startswith(str(p))),
+                key=lambda p: len(str(p)),
+                default=None,
+            )
+            if match is None:
+                continue
+            answered.add(match)
+            if line.endswith("REVOKED"):
+                revoked.add(match)
+        return answered, revoked
 
     def krl_add(self, cert_path: Path, ca_passphrase: str, use_agent: bool = False) -> None:
         args = ["-k"]
@@ -456,7 +523,15 @@ class CertificateAuthority:
         return store
 
     # --------------------------------------------------------------- Lesen
-    def load_certificate(self, cert_path: Path) -> CertInfo:
+    def load_certificate(
+        self, cert_path: Path, revoked: bool | None = None
+    ) -> CertInfo:
+        """Liest ein Zertifikat.
+
+        ``revoked`` uebernimmt einen bereits ermittelten Widerrufsstatus —
+        so kann der Index alle Zertifikate mit einem einzigen KRL-Aufruf
+        pruefen, statt hier je Datei einen weiteren Prozess zu starten.
+        """
         cert_path = Path(cert_path)
         result = self.ssh.run(["-L", "-f", str(cert_path)], check=False)
         if result.returncode != 0:
@@ -473,7 +548,9 @@ class CertificateAuthority:
         else:
             info.host = cert_path.parent.name
             info.user = cert_path.parent.parent.name
-            info.revoked = self.is_revoked(cert_path)
+            info.revoked = (
+                self.is_revoked(cert_path) if revoked is None else revoked
+            )
         return info
 
     def iter_active_certificates(self):
@@ -622,12 +699,36 @@ class CertificateAuthority:
         archive = Path(archive)
         if not archive.is_file():
             raise CaError(f"Sicherung nicht gefunden: {archive}")
+        base = self.paths.base.resolve()
+        prefix = str(base) + os.sep
         with tarfile.open(archive, "r:*") as tar:
             for member in tar.getmembers():
                 target = (self.paths.base / member.name).resolve()
-                if not str(target).startswith(str(self.paths.base.resolve())):
+                # Der Trenner gehoert an das Praefix: ohne ihn wuerde ein
+                # Nachbarverzeichnis, dessen Name mit dem der Basis beginnt
+                # (…/.ssh-ca-fremd), die Pruefung bestehen.
+                if target != base and not str(target).startswith(prefix):
                     raise CaError(f"Unerwarteter Pfad in der Sicherung: {member.name}")
-            tar.extractall(self.paths.base)
+                if member.issym() or member.islnk():
+                    # Symlinkziele sind relativ zum Verzeichnis des Eintrags,
+                    # Hardlinkziele relativ zur Archivwurzel.
+                    anchor = target.parent if member.issym() else self.paths.base
+                    link = (anchor / member.linkname).resolve()
+                    if link != base and not str(link).startswith(prefix):
+                        raise CaError(
+                            f"Verweis aus dem Datenverzeichnis heraus: "
+                            f"{member.name} → {member.linkname}"
+                        )
+            # Zweiter Riegel: die Pruefung oben sieht das Archiv, nicht das
+            # Dateisystem waehrend des Entpackens — ein Symlink, der erst
+            # dabei entsteht, koennte sonst als Durchschreibpfad dienen.
+            # 'tar' und nicht 'data': der strengere Filter setzt Verzeichnisse
+            # auf 0755, hier muessen 0700/0600 erhalten bleiben.
+            try:
+                tar.extractall(self.paths.base, filter="tar")
+            except TypeError:
+                # Python ohne Filter-Unterstuetzung (vor 3.11.4).
+                tar.extractall(self.paths.base)
         self.log("OK", f"Sicherung eingespielt: {archive}")
 
 
