@@ -1,6 +1,6 @@
 # SSH-CA Manager — Entwicklungsdokumentation
 
-Stand: Version 0.3.4
+Stand: Version 0.4.0
 
 Dieses Dokument enthält alles, was für die Weiterführung des Projekts ohne
 weiteres Vorwissen nötig ist: Architektur, Modulverantwortungen, die
@@ -92,6 +92,15 @@ den SQLite-Index mit dem Dateibaum ab.
 | `sshca/gui/dialogs.py` | Alle Dialoge. `CertDialog` deckt Erstellen, Erneuern (`fixed=`) und Externsignatur (`external=True`) ab. |
 | `sshca/gui/main_window.py` | Fenster: Seitenleiste, Seiten, Aktionen/Menüs, `refresh()`, Zoom, alle Handler (Muster: `_busy` → `run_task` → Callbacks → `on_done` reaktiviert). |
 | `sshca/gui/workers.py` | `run_task`: Threadpool + Brücken-QObject. **Vor Änderungen die Invariante lesen.** |
+| `sshca/protocol.py` | Gemeinsames Protokoll von Server und Client: Kanonisierung der Anfragen, SSHSIG signieren/prüfen, Gültigkeitsrechnung (`validity_seconds`, `cap_validity`). Beide Seiten binden **dieses** Modul ein — auseinanderlaufende Kanonisierung wäre ein stiller Fehler. |
+| `sshca/server/config.py` | `ServerConfig` (INI), `CONFIG_TEMPLATE`, `check_files()` sammelt Befunde statt abzubrechen. |
+| `sshca/server/registry.py` | Tokens und Clients als Dateibaum unter `state_dir`; `flock` + `os.replace` für Schreibzugriffe (Dienst und Token-Werkzeug sind zwei Prozesse). |
+| `sshca/server/api.py` | Vorgänge und **die gesamte Rechtevergabe** — ohne HTTP, deshalb ohne Netz testbar. Signiert über `ca.import_and_sign_pubkey`. |
+| `sshca/server/http.py` | Routen, Formprüfung, Signaturprüfung, Nonce-Cache, TLS. Entscheidet nichts über Rechte. |
+| `sshca/server/install.py` | systemd-Unit und Verzeichnisse; Trockenlauf ist Vorgabe, `--apply` führt aus. |
+| `sshca/server/service.py` · `token_tool.py` | Kommandozeilen `ssh-ca-server` und `ssh-ca-enroll-token`. |
+| `sshca/client/api.py` | Zustand unter `~/.ssh-ca-client`, HTTPS-Aufrufe, Schlüsselerzeugung auf dem Client. |
+| `sshca/client/cli.py` | Kommandozeile `ssh-ca-client`; Darstellung über die Hilfsfunktionen aus `tui.py`, damit der Client nicht wie ein fremdes Programm aussieht. |
 
 Tests: `tests/test_core.py`, `test_cli.py`, `test_tui.py`, `test_gui.py` —
 siehe [Teststrategie](#teststrategie).
@@ -180,16 +189,48 @@ vorhanden), bricht die Externsignatur ab. Nur rein extern signierte Stände
 (pub + cert ohne privaten Teil) werden bei Wiedereinreichung nach
 `archive/` rotiert.
 
+### 9. Client-Server: zwei Ebenen, zwei Fragen (`protocol.py`, `server/`)
+
+TLS beantwortet „rede ich mit dem richtigen Server", die SSHSIG über jede
+Anfrage beantwortet „ist dieser Client der registrierte". Eine zweite
+X.509-PKI für die Client-Authentisierung wurde ausdrücklich verworfen —
+sie hieße zweite Zertifikatsverwaltung mit eigenem Widerruf und eigenem
+Ablauf, für ein Werkzeug, das SSH-Schlüssel verwaltet.
+
+Signiert wird nie der Rumpf allein, sondern Methode, Pfad, Client-ID,
+Zeitstempel, Nonce und SHA-256 des Rumpfes gemeinsam; sonst ließe sich ein
+abgefangener Signaturblock auf einen anderen Endpunkt oder Inhalt setzen.
+Die Kanonisierung steht deshalb in **einem** Modul, das beide Seiten
+einbinden.
+
+Der **Benutzername kommt aus dem Token, nie aus der Anfrage**. Die
+Rechtevergabe liegt vollständig in `api.py`, nicht in `http.py` — das ist
+der Grund, warum sie sich ohne Netz testen lässt.
+
+Eine ausdrücklich zu lange Gültigkeit wird abgewiesen; stammt die Dauer
+aus der Vorlage, wird sie gekürzt. Der Unterschied ist die Absicht des
+Clients: was er selbst verlangt hat, darf nicht still verändert werden.
+
+### 10. Der Dienst fügt der Kernschicht nichts hinzu (`server/api.py`)
+
+Er ruft dieselben Funktionen wie GUI, TUI und CLI. Insbesondere signiert
+er über `import_and_sign_pubkey` — dadurch gelten Archivrotation,
+Kollisionsschutz gegen lokal verwaltete Schlüssel und die Regel „kein
+privater Schlüssel auf der CA" automatisch mit. Eine eigene Signierlogik
+im Dienst wäre eine zweite Stelle, an der diese Regeln gelten müssten.
+
 ## Teststrategie
 
-Vier Suiten, zusammen 187 Prüfungen, alle ohne Bildschirm und ohne echtes
-Terminal lauffähig; benötigt wird nur `ssh-keygen` im `PATH` (und für die
-GUI-Suite PySide6):
+Fünf Suiten, zusammen 187 Prüfungen, alle ohne Bildschirm und ohne echtes
+Terminal lauffähig; benötigt wird nur `ssh-keygen` im `PATH` (für die
+GUI-Suite PySide6, für den TLS-Teil von `test_server.py` zusätzlich
+`openssl` — fehlt es, wird genau dieser Teil übersprungen):
 
 ```sh
 python3 tests/test_core.py                           # 58 — Kernschicht
 python3 tests/test_cli.py                            # 37 — Subcommands
 python3 tests/test_tui.py                            # 34 — Menü, gescriptet
+python3 tests/test_server.py                         # 93 — Dienst und Client
 QT_QPA_PLATFORM=offscreen python3 tests/test_gui.py  # 58 — GUI headless
 ```
 
@@ -205,6 +246,10 @@ Prinzipien:
 * CLI/TUI-Tests speisen Eingaben und Passphrasen über die Hooks als Queues
   ein; **leergelaufene oder übrige Queues sind Testfehler** — dadurch fällt
   jede Änderung an Abfrage-Reihenfolgen sofort auf. Das ist Absicht.
+* `test_server.py` fährt einen echten TLS-Server auf 127.0.0.1 mit einem
+  Wegwerfzertifikat und prüft neben den Erfolgspfaden ausdrücklich die
+  Abwehr: Wiedereinspielung, alter Zeitstempel, fehlende Signatur, fremder
+  Schlüssel, fremder Host, nicht freigegebene Prinzipale und Vorlagen.
 * GUI-Tests bauen echte Fenster/Dialoge offscreen, prüfen Modelle, Filter,
   Zoom (Stylesheet-Inhalt!) und enthalten den Worker-Regressionstest.
 * Neue Funktion ⇒ Kern-Test für Erfolg **und** Fehlerpfade, plus je ein
@@ -255,15 +300,20 @@ Screenshots zur Sichtprüfung entstehen headless (`widget.grab().save(…)`)
   abgedichtet; KRL-Prüfung als Sammelaufruf.
 * **0.3.4** Widerruf sperrt Zertifikat und Public Key statt nur der
   Seriennummer.
-* **Verworfen: Client-Server** (0.4.0-dev, nicht in der Historie von
-  `main`). HTTPS-Signierdienst mit Token-Enrollment, `ssh-keygen -Y`-
-  signierten Requests, Policies, systemd-Härtung — funktionsfähig
-  (29 Tests), aber für den Ein-Admin-Homelab-Betrieb zu viel
-  Betriebsaufwand. Bewusste Entscheidung: lokal ausstellen, Schlüssel
-  manuell verteilen; für Fremdschlüssel gibt es seit 0.3.2 die
-  Externsignatur. Bei Wiederaufnahme: Schlüsselerzeugung gehört auf den
-  Client, Transport-TLS aus der bestehenden SSL-CA, Client-Auth über
-  SSH-Signaturen — nicht über eine zweite X.509-PKI.
+* **0.4.0** Client-Server wieder aufgenommen — in genau der Form, die
+  hier für den Fall der Wiederaufnahme festgehalten war:
+  Schlüsselerzeugung auf dem Client, Transport-TLS aus der bestehenden
+  X.509-PKI, Client-Auth über SSH-Signaturen statt über eine zweite PKI.
+  Dienst als systemd-Unit mit Installationsroutine, Enrollment über
+  Tokens aus einem eigenen Programm, Vorlagen und Prinzipale serverseitig
+  freigegeben. Der lokale Betrieb bleibt der Normalfall; der Dienst ist
+  optional und ändert weder Datenlayout noch Oberflächen.
+* **Verworfen (0.3.x): Client-Server als Pflichtweg.** Die frühere
+  0.4.0-dev-Fassung war funktionsfähig, aber für den Ein-Admin-Betrieb zu
+  viel Aufwand. Die Antwort darauf ist nicht „nicht bauen", sondern
+  „optional halten": ohne Dienst verhält sich die Anwendung wie in 0.3.x,
+  und für einzelne Fremdschlüssel bleibt die Externsignatur aus 0.3.2 der
+  kürzere Weg.
 
 ## Roadmap
 
@@ -271,8 +321,11 @@ Offene, bewusst zurückgestellte Punkte:
 
 * Host-Zertifikate (`ssh-keygen -h` samt `HostCertificate`-Anleitung).
 * CA-Schlüssel auf PKCS#11-Token (`ssh-keygen -D`); die Signaturschicht
-  unterscheidet bereits Datei/Agent, ein dritter Weg passt dort an.
+  unterscheidet bereits Datei/Agent, ein dritter Weg passt dort an — und
+  wäre für den Dienst der sauberste Signierweg.
 * Vorlagen-Editor in der GUI (derzeit `templates.json` von Hand).
 * Erinnerung an bald ablaufende Zertifikate.
 * KRL-Verteilung an Zielsysteme aus der Anwendung heraus (derzeit
-  Anleitung + manuell/Ansible).
+  Anleitung + manuell/Ansible; `ssh-ca-client ca` holt sie immerhin ab).
+* Nonce-Cache des Dienstes überdauert keinen Neustart — bei Bedarf
+  persistieren.

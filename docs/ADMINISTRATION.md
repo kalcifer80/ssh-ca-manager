@@ -1,10 +1,11 @@
 # SSH-CA Manager — Administrationshandbuch
 
-Stand: Version 0.3.2
+Stand: Version 0.4.0
 
 Dieses Handbuch beschreibt Installation, Datenhaltung, Sicherheitsmodell,
 die Einrichtung der Zielsysteme und die Wartung. Die Bedienung beschreibt
-[BENUTZERHANDBUCH.md](BENUTZERHANDBUCH.md), die Weiterentwicklung
+[BENUTZERHANDBUCH.md](BENUTZERHANDBUCH.md), den optionalen Signierdienst
+[SERVER-CLIENT.md](SERVER-CLIENT.md), die Weiterentwicklung
 [ENTWICKLUNG.md](ENTWICKLUNG.md).
 
 ## Inhalt
@@ -38,8 +39,12 @@ sudo apt install python3 openssh-client python3-pyside6.qtwidgets
 python3 -m venv ~/.venvs/sshca && ~/.venvs/sshca/bin/pip install PySide6
 ```
 
-Projekt ablegen (z. B. `/opt/ssh-ca-manager` oder im Home), Startskripte
-sind `ssh-ca-manager.py` (ausführbar). Optional `ssh-ca-manager.desktop`
+Projekt ablegen (z. B. `/opt/ssh-ca-manager` oder im Home), Startskript
+ist `ssh-ca-manager.py` (ausführbar). Für den optionalen Client-Server-
+Betrieb kommen `ssh-ca-server.py`, `ssh-ca-client.py` und
+`ssh-ca-enroll-token.py` daneben; nur der Dienst wird im System
+registriert, und das ausdrücklich über `ssh-ca-server install`
+(siehe [SERVER-CLIENT.md](SERVER-CLIENT.md)). Optional `ssh-ca-manager.desktop`
 nach `~/.local/share/applications/` und im `Exec=`-Feld den vollen Pfad
 eintragen. Es gibt keinen Installationsschritt und keine Registrierung im
 System — Löschen des Verzeichnisses entfernt die Anwendung (die Daten

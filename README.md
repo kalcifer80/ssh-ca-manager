@@ -3,8 +3,9 @@
 Verwaltung einer SSH Certificate Authority — das, was XCA für X.509 ist, für
 OpenSSH-Zertifikate. Eigenständige Anwendung mit drei gleichwertigen
 Oberflächen (GUI, interaktives Terminal-Menü, Subcommand-CLI) über einer
-gemeinsamen Kernschicht; alles lokal, kein Dienst und keine Datenbank im
-Hintergrund.
+gemeinsamen Kernschicht; keine Datenbank im Hintergrund. Der Betrieb ist
+lokal — optional kommt seit 0.4.0 ein Signierdienst dazu, über den sich
+Clients ihre Zertifikate selbst holen.
 
 **Dokumentation:**
 
@@ -12,6 +13,7 @@ Hintergrund.
 |---|---|
 | [docs/BENUTZERHANDBUCH.md](docs/BENUTZERHANDBUCH.md) | Bedienung: GUI, Menü, CLI, typische Abläufe |
 | [docs/ADMINISTRATION.md](docs/ADMINISTRATION.md) | Installation, Datenlayout, Sicherheitsmodell, Zielsysteme, Sicherung, Fehlerbehebung |
+| [docs/SERVER-CLIENT.md](docs/SERVER-CLIENT.md) | Optionaler Signierdienst: Installation, Enrollment, Client, API |
 | [docs/ENTWICKLUNG.md](docs/ENTWICKLUNG.md) | Architektur, Modulverantwortungen, unantastbare Invarianten, Tests, Release-Prozess |
 | [CHANGELOG.md](CHANGELOG.md) | Versionshistorie |
 
@@ -104,13 +106,41 @@ sshca/
     ca.py          Kernlogik: anlegen, signieren, erneuern, widerrufen, sichern
     store.py       SQLite-Index über den Dateibaum
     templates.py   Vorlagen (Gültigkeit, Prinzipale, Extensions)
+    protocol.py    gemeinsames Protokoll von Dienst und Client
     gui/
         theme.py         Farbpalette, Stylesheet, Status-Pillen-Delegate
         main_window.py   Fenster, Seitenleiste, Seiten, Aktionen
         models.py        Tabellenmodelle und Filter
         dialogs.py       Dialoge
         workers.py       Hintergrundausführung
+    server/            Signierdienst (config, registry, api, http, install,
+                       service, token_tool)
+    client/            Client (api, cli)
 ```
+
+## Client-Server (optional)
+
+Seit 0.4.0 gibt es zusätzlich einen HTTPS-Signierdienst. Der Client
+erzeugt seinen ed25519-Schlüssel selbst, lässt nur den öffentlichen Teil
+signieren und bekommt die `…-cert.pub` zurück — auf der CA entsteht nie
+ein privater Schlüssel:
+
+```sh
+# Server, einmalig
+sudo ./ssh-ca-server.py install --apply      # ohne --apply: Trockenlauf
+sudo ssh-ca-enroll-token create --user dennis --host jump --valid 24h
+
+# Client
+ssh-ca-client enroll --server https://ca.example:8443 --token <ID>.<Geheimnis> \
+  --ca-bundle /etc/ssl/certs/pki-root.pem
+ssh-ca-client request
+```
+
+Transport-TLS kommt aus der bestehenden X.509-PKI, die Client-Authenti-
+sierung über SSH-Signaturen (`ssh-keygen -Y`). Prinzipale und Vorlagen
+gibt der Server frei, der Client wählt daraus. Ausgestellte Zertifikate
+erscheinen im normalen Bestand und werden dort widerrufen. Alles Weitere:
+[docs/SERVER-CLIENT.md](docs/SERVER-CLIENT.md).
 
 ## Externe Schlüssel signieren
 
@@ -187,17 +217,18 @@ Index neu auf, Löschen der Datei ist gefahrlos.
 python3 tests/test_core.py                           # Kernschicht, braucht ssh-keygen
 python3 tests/test_cli.py                            # Subcommand-CLI
 python3 tests/test_tui.py                            # interaktives Menü, gescriptet
+python3 tests/test_server.py                         # Dienst und Client, echtes TLS
 QT_QPA_PLATFORM=offscreen python3 tests/test_gui.py  # Oberfläche, ohne Bildschirm
 ```
 
-Beide Tests arbeiten in einem temporären Verzeichnis und fassen `~/.ssh-ca`
-nicht an.
+Alle Suiten arbeiten in einem temporären Verzeichnis und fassen `~/.ssh-ca`
+und `~/.ssh-ca-client` nicht an.
 
 ## Offene Punkte
 
 * Host-Zertifikate (`ssh-keygen -h`) — bislang nur Benutzerzertifikate.
 * CA-Schlüssel auf PKCS#11-Token (`ssh-keygen -D`).
 * Verteilung von CA-Public-Key und KRL auf die Zielsysteme, statt nur die
-  Anleitung dafür anzuzeigen.
+  Anleitung dafür anzuzeigen (`ssh-ca-client ca` holt beides immerhin ab).
 * Vorlagen-Editor in der Oberfläche; derzeit wird `templates.json` bearbeitet.
 * Erinnerung an bald ablaufende Zertifikate.

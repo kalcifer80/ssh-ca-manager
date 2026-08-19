@@ -82,12 +82,18 @@ class Ssh:
         timeout: int = DEFAULT_TIMEOUT,
         check: bool = True,
         cwd: Path | None = None,
+        stdin_file: Path | None = None,
     ) -> Result:
         """Ruft ssh-keygen (oder ``binary``) auf.
 
         ``passphrases`` enthaelt die Antworten in der Reihenfolge, in der
         ssh-keygen danach fragt. Beim Erzeugen eines Schluessels sind das zwei
         identische Eintraege (Eingabe und Bestaetigung), beim Signieren einer.
+
+        ``stdin_file`` haengt eine Datei an stdin. Genau ein Aufruf braucht
+        das: ``ssh-keygen -Y verify`` liest die zu pruefende Nachricht
+        ausschliesslich von stdin. Ohne Angabe bleibt stdin ``DEVNULL`` —
+        nichts darf jemals auf eine Eingabe warten.
         """
         argv = [binary or self.keygen, *args]
         env = os.environ.copy()
@@ -113,7 +119,10 @@ class Ssh:
             # werden: ein fehlendes Askpass fuehrt sonst zu einem Haenger.
             env["SSH_ASKPASS_REQUIRE"] = "never"
 
+        stdin_handle = None
         try:
+            if stdin_file is not None:
+                stdin_handle = open(stdin_file, "rb")
             proc = subprocess.run(
                 argv,
                 capture_output=True,
@@ -122,9 +131,11 @@ class Ssh:
                 timeout=timeout,
                 pass_fds=pass_fds,
                 cwd=str(cwd) if cwd else None,
-                stdin=subprocess.DEVNULL,
+                stdin=stdin_handle or subprocess.DEVNULL,
             )
         finally:
+            if stdin_handle is not None:
+                stdin_handle.close()
             if read_fd is not None:
                 os.close(read_fd)
 

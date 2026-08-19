@@ -1,11 +1,16 @@
 # SSH-CA Manager — Benutzerhandbuch
 
-Stand: Version 0.3.2
+Stand: Version 0.4.0
 
 Dieses Handbuch richtet sich an alle, die mit dem SSH-CA Manager Zertifikate
 ausstellen, erneuern, widerrufen und verteilen. Die Einrichtung des Systems
 selbst (Installation, Zielsysteme, Sicherung) beschreibt
 [ADMINISTRATION.md](ADMINISTRATION.md).
+
+Wer sein Zertifikat nicht hier, sondern über den optionalen Signierdienst
+von einer anderen Maschine bezieht, findet die Bedienung des Clients in
+[SERVER-CLIENT.md](SERVER-CLIENT.md) — die Begriffe unten gelten dort
+unverändert.
 
 ## Inhalt
 
